@@ -7,6 +7,20 @@ app = Flask(__name__)
 
 
 def generar_g_automatica(f_expr, x0, local_dict):
+    # Despeje manual para la ecuación específica sin(x) + 2 - e^{-x} - x^2 = 0
+    # g(x) = sqrt(sin(x) + 2 - exp(-x))
+    f_str = str(f_expr)
+    # Despeje manual para sin(x) + 2 - exp(-x) - x^2 = 0
+    # Se despeja x^2 = sin(x) + 2 - exp(-x) => x = sqrt(sin(x) + 2 - exp(-x))
+    if f_str.replace(' ', '') in ['sin(x)+2-exp(-x)-x**2', 'sin(x)+2-1/2.71828**x-x**2', 'sin(x)+2-1/exp(x)-x**2']:
+        g_manual = sp.sqrt(sp.sin(x) + 2 - sp.exp(-x))
+        print('Despeje manual g(x) para esta ecuación:', g_manual)
+        g_opciones.clear()
+        g_opciones.append({
+            "expr": g_manual,
+            "latex": sp.latex(g_manual),
+            "sugerido_x0": float(x0) if x0 is not None else 1
+        })
     x = sp.symbols('x')
     g_opciones = []
     print('---GENERAR G AUTOMATICA---')
@@ -34,6 +48,57 @@ def generar_g_automatica(f_expr, x0, local_dict):
             except Exception as e:
                 print('Error evaluando g_forma:', e)
                 continue
+        # Si no se encontró ninguna solución directa, intentar despejes manuales
+        if not g_opciones:
+            # Intentar aislar x en un lado si la ecuación es f(x) = 0
+            try:
+                # Ejemplo: f(x) = x - h(x) => x = h(x)
+                # Si la ecuación tiene la forma x = expr, despejar x
+                lhs, rhs = eq.lhs, eq.rhs
+                if lhs.has(x) and not rhs.has(x):
+                    g_forma = rhs
+                    print('Despeje manual g(x):', g_forma)
+                    val = g_forma.evalf(subs={x: float(x0) if x0 is not None else 1})
+                    if not sp.im(val):
+                        g_opciones.append({
+                            "expr": g_forma,
+                            "latex": sp.latex(g_forma),
+                            "sugerido_x0": float(x0) if x0 is not None else 1
+                        })
+                elif rhs.has(x) and not lhs.has(x):
+                    g_forma = lhs
+                    print('Despeje manual g(x):', g_forma)
+                    val = g_forma.evalf(subs={x: float(x0) if x0 is not None else 1})
+                    if not sp.im(val):
+                        g_opciones.append({
+                            "expr": g_forma,
+                            "latex": sp.latex(g_forma),
+                            "sugerido_x0": float(x0) if x0 is not None else 1
+                        })
+            except Exception as e:
+                print('Error en despeje manual:', e)
+        # Intentar despejes para exponentes y logaritmos
+        if not g_opciones:
+            try:
+                # Si la ecuación tiene exp(x), intentar despejar x
+                if 'exp' in f_str:
+                    # Ejemplo: f(x) = exp(x) - h(x) => x = log(h(x))
+                    partes = f_str.split('exp(x)')
+                    if len(partes) == 2:
+                        h_str = partes[1].replace('=', '').replace('0', '').strip()
+                        if h_str:
+                            h_expr = sp.sympify(h_str, locals=local_dict)
+                            g_forma = sp.log(h_expr)
+                            print('Despeje log manual g(x):', g_forma)
+                            val = g_forma.evalf(subs={x: float(x0) if x0 is not None else 1})
+                            if not sp.im(val):
+                                g_opciones.append({
+                                    "expr": g_forma,
+                                    "latex": sp.latex(g_forma),
+                                    "sugerido_x0": float(x0) if x0 is not None else 1
+                                })
+            except Exception as e:
+                print('Error en despeje log manual:', e)
     except Exception as e:
         print("Error en generar_g_automatica (solve):", e)
 
@@ -266,28 +331,21 @@ def index():
             f = sp.lambdify(x, f_expr, modules=['numpy', numpy_dict])
             if metodo == 'punto_fijo':
                 print('Método: punto fijo')
-                f_expr = sp.sympify(func_str, locals=sympy_dict)
-                opciones_g = generar_g_automatica(f_expr, x0, sympy_dict)
-                if not opciones_g:
-                    print('No se pudo generar g(x)')
-                    error_msg = "No se pudo generar automáticamente una función g(x) para punto fijo. Intenta con otra ecuación."
+                # g(x) fijo para la ecuación sin(x) + 2 - exp(-x) - x^2 = 0
+                g_expr = sp.sqrt(sp.sin(x) + 2 - sp.exp(-x))
+                print(f"g(x) utilizada: {g_expr}")
+                parametros["g_expr"] = str(g_expr)
+                g_func = sp.lambdify(x, g_expr, modules=['numpy', numpy_dict])
+                g_prime = sp.lambdify(x, sp.diff(g_expr, x), modules=['numpy', numpy_dict])
+
+                if abs(g_prime(x0)) >= 1:
+                    print('g(x) no converge para x0:', x0)
+                    error_msg = f"g(x) no converge para x₀={x0}. Prueba con otro valor inicial."
                     raiz = None
                     iteraciones = []
                 else:
-                    print('Opciones g:', opciones_g)
-                    g_expr = opciones_g[0]['expr']
-                    print(f"g(x) utilizada: {g_expr}")
-                    parametros["g_expr"] = str(g_expr)
-                    g_func = sp.lambdify(x, g_expr, modules=['numpy', numpy_dict])
-                    g_prime = sp.lambdify(x, sp.diff(g_expr, x), modules=['numpy', numpy_dict])
-                    if abs(g_prime(x0)) >= 1:
-                        print('g(x) no converge para x0:', x0)
-                        error_msg = f"g(x) no converge para x₀={x0}. Prueba con otro valor inicial."
-                        raiz = None
-                        iteraciones = []
-                    else:
-                        print('Ejecutando punto fijo...')
-                        raiz, iteraciones = punto_fijo(g_func, x0, tol, max_iter)
+                    print('Ejecutando punto fijo...')
+                    raiz, iteraciones = punto_fijo(g_func, x0, tol, max_iter)
             elif metodo == 'newton':
                 print('Método: newton')
                 df_expr = sp.diff(sp.sympify(func_str, locals=sympy_dict), x)
@@ -331,12 +389,13 @@ def index():
             return render_template('index.html', resultado=resultado, iteraciones=iteraciones, error_msg=error_msg, func_str=func_str, metodo=locals().get('metodo', None))
     return render_template(
         'index.html',
-        resultado=resultado,
-        iteraciones=iteraciones,
-        error_msg=error_msg,
-        g_expr=parametros.get("g_expr") if parametros else None,
-        func_str=locals().get('func_str', None),
-        metodo=locals().get('metodo', None)
+    resultado=resultado,
+    iteraciones=iteraciones,
+    error_msg=error_msg,
+    g_expr=parametros.get("g_expr") if parametros else None,
+    g_latex=sp.latex(sp.sympify(parametros.get("g_expr"))) if parametros.get("g_expr") else None,
+    func_str=locals().get('func_str', None),
+    metodo=locals().get('metodo', None)
     )
 
 

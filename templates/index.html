@@ -135,7 +135,17 @@
 
   <!-- Eliminado campo de selección de g(x) y su for/endfor -->
 
-      <div id="preview_g" style="margin-top:10px; font-size:1.2rem; color:#111;"></div>
+      {% if g_latex %}
+        <div style="margin-top:10px; font-size:1.2rem; color:#1976d2; text-align:center;">
+          <b>Función g(x) utilizada para punto fijo:</b><br>
+          <span id="gx-latex">\[{{ g_latex }}\]</span>
+        </div>
+        <script>
+          if (window.MathJax) {
+            MathJax.typesetPromise([document.getElementById('gx-latex')]);
+          }
+        </script>
+      {% endif %}
 
       <div class="row" id="campo_x1">
         <label for="x1" id="label_x1">x₁:</label>
