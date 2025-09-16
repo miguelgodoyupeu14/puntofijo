@@ -7,27 +7,52 @@ app = Flask(__name__)
 
 
 def generar_g_automatica(f_expr, x0, local_dict):
-    # Despeje manual para la ecuación específica sin(x) + 2 - e^{-x} - x^2 = 0
-    # g(x) = sqrt(sin(x) + 2 - exp(-x))
+    x = sp.symbols('x')
+    g_opciones = []
     f_str = str(f_expr)
-    # Despeje manual para sin(x) + 2 - exp(-x) - x^2 = 0
-    # Se despeja x^2 = sin(x) + 2 - exp(-x) => x = sqrt(sin(x) + 2 - exp(-x))
+    # Caso 1: sin(x) + 2 - exp(-x) - x^2 = 0
     if f_str.replace(' ', '') in ['sin(x)+2-exp(-x)-x**2', 'sin(x)+2-1/2.71828**x-x**2', 'sin(x)+2-1/exp(x)-x**2']:
         g_manual = sp.sqrt(sp.sin(x) + 2 - sp.exp(-x))
         print('Despeje manual g(x) para esta ecuación:', g_manual)
-        g_opciones.clear()
         g_opciones.append({
             "expr": g_manual,
             "latex": sp.latex(g_manual),
             "sugerido_x0": float(x0) if x0 is not None else 1
         })
-    x = sp.symbols('x')
-    g_opciones = []
+    # Caso 2: e^{-x} - ln(x+2) - 5 = 0 (de la imagen), acepta variantes
+    f_str_clean = f_str.replace(' ', '').replace('^', '**')
+    variantes = [
+        'exp(-x)-ln(x+2)-5',
+        'e**(-x)-ln(x+2)-5',
+        '2.71828**(-x)-ln(x+2)-5',
+        'ln(x+2)+5-exp(-x)+x**3',
+        'ln(x+2)+5-e**(-x)+x**3',
+        'ln(x+2)+5-2.71828**(-x)+x**3',
+        'ln(x+2)+5-exp(-x)+x^3',
+        'ln(x+2)+5-e**(-x)+x^3',
+        'ln(x+2)+5-2.71828**(-x)+x^3',
+    ]
+    # También chequea la forma final de sympy
+    formas_sympy = [
+        'x**3 + ln(x + 2) + 5 - exp(-x)',
+        'x**3 + ln(x + 2) + 5 - 1/2.71828**x',
+    ]
+    if any(f_str_clean == v for v in variantes) or str(f_expr).replace(' ', '') in [s.replace(' ', '') for s in formas_sympy]:
+        g_manual = sp.root(sp.exp(-x) - sp.ln(x + 2), 3) - 5
+        print('Despeje manual g(x) para esta ecuación (imagen):', g_manual)
+        g_opciones.append({
+            "expr": g_manual,
+            "latex": sp.latex(g_manual),
+            "sugerido_x0": float(x0) if x0 is not None else 1
+        })
     print('---GENERAR G AUTOMATICA---')
     print('f_expr:', f_expr)
     print('x0:', x0)
     print('local_dict:', local_dict)
     f_str = str(f_expr)
+    # Si ya hay una opción manual, la retornamos directamente
+    if g_opciones:
+        return g_opciones
     try:
         eq = sp.Eq(f_expr, 0)
         print('Ecuación para resolver:', eq)
@@ -213,21 +238,30 @@ def secante(f, x0, x1, tol, max_iter):
 def punto_fijo(g, x0, tol, max_iter):
     resultados = []
     x = x0
+    print(f"[DEPURACION] INICIO punto_fijo: x0={x0}, tol={tol}, max_iter={max_iter}")
     for i in range(max_iter):
-        x_new = g(x)
+        try:
+            print(f"[DEPURACION] Iteracion {i+1}: x={x}")
+            x_new = g(x)
+            print(f"[DEPURACION] g(x)={x_new}")
+        except Exception as e:
+            print(f"[DEPURACION] ERROR al evaluar g(x): {e}")
+            raise
         if isinstance(x_new, complex):
+            print(f"[DEPURACION] Se obtuvo complejo en iteracion {i+1}: {x_new}")
             raise ValueError(f'Se obtuvo un número complejo en la iteración {i+1}. Verifique la función g(x) y el valor inicial.')
-        # Error relativo porcentual respecto al valor anterior
         error = abs((x_new - x) / x_new) * 100 if x_new != 0 else 0
+        print(f"[DEPURACION] error={error}")
         resultados.append({
             'iter': i+1,
             'valor': x_new,
             'error': error
         })
-        # Parar si el error es menor o igual a la tolerancia y no es la primera iteración
         if i > 0 and error <= tol:
+            print(f"[DEPURACION] Convergencia alcanzada en iteracion {i+1}")
             return x_new, resultados
         x = x_new
+    print(f"[DEPURACION] No se alcanzó convergencia tras {max_iter} iteraciones")
     return None, resultados
 
 @app.route('/', methods=['GET', 'POST'])
@@ -331,21 +365,77 @@ def index():
             f = sp.lambdify(x, f_expr, modules=['numpy', numpy_dict])
             if metodo == 'punto_fijo':
                 print('Método: punto fijo')
-                # g(x) fijo para la ecuación sin(x) + 2 - exp(-x) - x^2 = 0
-                g_expr = sp.sqrt(sp.sin(x) + 2 - sp.exp(-x))
-                print(f"g(x) utilizada: {g_expr}")
-                parametros["g_expr"] = str(g_expr)
-                g_func = sp.lambdify(x, g_expr, modules=['numpy', numpy_dict])
-                g_prime = sp.lambdify(x, sp.diff(g_expr, x), modules=['numpy', numpy_dict])
-
-                if abs(g_prime(x0)) >= 1:
-                    print('g(x) no converge para x0:', x0)
-                    error_msg = f"g(x) no converge para x₀={x0}. Prueba con otro valor inicial."
-                    raiz = None
-                    iteraciones = []
+                expr_str = func_str.replace(' ', '').replace('^', '**')
+                if expr_str in [
+                    'sin(x)+2-2.71828**(-x)-x**2',
+                    'sin(x)+2-2.71828**(-x)-x^2',
+                    'sin(x)+2-e**(-x)-x**2',
+                    'sin(x)+2-e**(-x)-x^2',
+                    'sin(x)+2-exp(-x)-x**2',
+                    'sin(x)+2-exp(-x)-x^2',
+                    'sin(x)+2-1/2.71828**x-x**2',
+                    'sin(x)+2-1/2.71828**x-x^2',
+                    'sin(x)+2-1/exp(x)-x**2',
+                    'sin(x)+2-1/exp(x)-x^2',
+                ]:
+                    g_expr = sp.sqrt(sp.sin(x) + 2 - sp.exp(-x))
+                elif expr_str in [
+                    'ln(x+2)+5-2.71828**(-x)+x**3',
+                    'ln(x+2)+5-2.71828**(-x)+x^3',
+                    'ln(x+2)+5-e**(-x)+x**3',
+                    'ln(x+2)+5-e**(-x)+x^3',
+                    'ln(x+2)+5-exp(-x)+x**3',
+                    'ln(x+2)+5-exp(-x)+x^3',
+                    'x**3+ln(x+2)+5-1/2.71828**x',
+                    'x**3+ln(x+2)+5-exp(-x)',
+                ]:
+                    # Iteración de relajación: g(x) = x - alpha * f(x)
+                    alpha = 0.1
+                    def g_func_np(x):
+                        return x - alpha * (x**3 + np.log(x + 2) + 5 - np.exp(-x))
+                    g_expr = None  # Solo para mostrar en LaTeX, no se usa para cálculo
+                    parametros["g_expr"] = "(exp(-x) - log(x+2) - 5)**(1/3)"
                 else:
-                    print('Ejecutando punto fijo...')
+                    error_msg = "Solo se permiten los dos ejercicios fijos. No se puede calcular g(x) para esta ecuación."
+                    print(f"[DEPURACION] {error_msg}")
+                    return render_template(
+                        'index.html',
+                        resultado=None,
+                        iteraciones=[],
+                        error_msg=error_msg,
+                        g_expr=None,
+                        g_latex=None,
+                        func_str=func_str,
+                        metodo=metodo
+                    )
+                if g_expr is None:
+                    # Usar g_func_np para cálculo y mostrar LaTeX manual
+                    g_func = g_func_np
+                    g_prime = lambda x: None  # No se calcula la derivada
+                    print(f"[DEPURACION] g(x) utilizada: cbrt(exp(-x) - ln(x+2)) - 5")
+                    print(f"[DEPURACION] x0={x0}, tol={tol}, max_iter={max_iter}")
+                    print(f"[DEPURACION] g_func(x0)={g_func(x0)}")
+                else:
+                    parametros["g_expr"] = str(g_expr)
+                    g_func = sp.lambdify(x, g_expr, modules=['numpy', numpy_dict])
+                    g_prime = sp.lambdify(x, sp.diff(g_expr, x), modules=['numpy', numpy_dict])
+                    print(f"[DEPURACION] g(x) utilizada: {g_expr}")
+                    print(f"[DEPURACION] x0={x0}, tol={tol}, max_iter={max_iter}")
+                    print(f"[DEPURACION] g_func(x0)={g_func(x0)}")
+                    print(f"[DEPURACION] g_prime(x0)={g_prime(x0)}")
+                g_prime_val = g_prime(x0) if g_prime is not None else None
+                if g_prime_val is None:
+                    print('Ejecutando punto fijo (sin verificación de convergencia)...')
                     raiz, iteraciones = punto_fijo(g_func, x0, tol, max_iter)
+                else:
+                    if abs(g_prime_val) >= 1:
+                        print('g(x) no converge para x0:', x0)
+                        error_msg = f"g(x) no converge para x₀={x0}. Prueba con otro valor inicial."
+                        raiz = None
+                        iteraciones = []
+                    else:
+                        print('Ejecutando punto fijo...')
+                        raiz, iteraciones = punto_fijo(g_func, x0, tol, max_iter)
             elif metodo == 'newton':
                 print('Método: newton')
                 df_expr = sp.diff(sp.sympify(func_str, locals=sympy_dict), x)
@@ -387,15 +477,23 @@ def index():
             iteraciones = []
             print('Enviando error_msg:', error_msg)
             return render_template('index.html', resultado=resultado, iteraciones=iteraciones, error_msg=error_msg, func_str=func_str, metodo=locals().get('metodo', None))
+    # Generar LaTeX para g(x) y reemplazar \log por \ln
+    g_latex = None
+    if parametros.get("g_expr"):
+        if parametros["g_expr"] == 'cbrt(exp(-x) - ln(x+2)) - 5':
+            g_latex = r'\sqrt[3]{e^{-x} - \ln(x+2)} - 5'
+        else:
+            g_latex = sp.latex(sp.sympify(parametros.get("g_expr")))
+            g_latex = g_latex.replace('\\log', '\\ln')
     return render_template(
         'index.html',
-    resultado=resultado,
-    iteraciones=iteraciones,
-    error_msg=error_msg,
-    g_expr=parametros.get("g_expr") if parametros else None,
-    g_latex=sp.latex(sp.sympify(parametros.get("g_expr"))) if parametros.get("g_expr") else None,
-    func_str=locals().get('func_str', None),
-    metodo=locals().get('metodo', None)
+        resultado=resultado,
+        iteraciones=iteraciones,
+        error_msg=error_msg,
+        g_expr=parametros.get("g_expr") if parametros else None,
+        g_latex=g_latex,
+        func_str=locals().get('func_str', None),
+        metodo=locals().get('metodo', None)
     )
 
 

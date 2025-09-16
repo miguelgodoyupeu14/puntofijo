@@ -158,7 +158,7 @@
           value="{{ request.form['tol'] if request.form.get('tol') else 0.0001 }}" step="any" required>
         <label for="max_iter">Iteraciones máx:</label>
         <input type="number" id="max_iter" name="max_iter"
-          value="{{ request.form['max_iter'] if request.form.get('max_iter') else 50 }}" min="1" max="1000" required>
+          value="{{ request.form['max_iter'] if request.form.get('max_iter') else 20 }}" min="1" max="1000" required>
       </div>
       <div class="row">
         <button type="submit">Calcular raíz</button>
